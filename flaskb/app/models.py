@@ -5,7 +5,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import TimedJSONWebSignatureSerializer as Serializer
 from flask import current_app, request
 from datetime import datetime
-import hashlib
+import hashlib,bleach
+from markdown import markdown
 
 
 @login_manager.user_loader
@@ -76,8 +77,8 @@ class User(UserMixin, db.Model):
     last_seen = db.Column(db.DateTime(), default=datetime.utcnow)
     # utcnow 不带(), 这里的default可以接受函数作为默认值
     posts = db.relationship('Post', backref='author', lazy='dynamic')
-    #头像散列值
-    avatar_hash=db.Column(db.String(32))
+    # 头像散列值
+    avatar_hash = db.Column(db.String(32))
 
     # define default role
     def __init__(self, **kwargs):
@@ -87,7 +88,7 @@ class User(UserMixin, db.Model):
                 self.role = Role.query.filter_by(permissions=0xff).first()
             if self.role is None:
                 self.role = Role.query.filter_by(default=True).first()
-        #根据邮件地址生产散列值，缓存数据，要不每次都生成
+        # 根据邮件地址生产散列值，缓存数据，要不每次都生成
         if self.email is not None and self.avatar_hash is not None:
             self.avatar_hash = hashlib.md5(self.email.encode('UTF-8')).hexdigest()
 
@@ -159,10 +160,34 @@ class User(UserMixin, db.Model):
             url = 'https://secure.gravatar.com/avatar'
         else:
             url = 'http://www.gravatar.com/avatar'
-        hash = self.avatar_hash or hashlib.md5(self.email.encode('UTF-8')).hexdigest()
+        hash = self.avatar_hash or hashlib.md5(
+            self.email.encode('utf-8')).hexdigest()
         return '{url}/{hash}?s={size}&d={default}&r={rating}'.format(url=url,
                                                                      hash=hash, size=size,
-                                                                     default=default,rating=rating)
+                                                                     default=default, rating=rating)
+
+    # 生成虚拟用户数据
+    @staticmethod
+    def generate_fake(count=100):
+        from sqlalchemy.exc import IntegrityError
+        from random import seed
+        import forgery_py
+
+        seed()
+        for i in range(count):
+            u = User(email=forgery_py.internet.email_address(),
+                     username=forgery_py.internet.user_name(),
+                     password=forgery_py.lorem_ipsum.word(),
+                     confirmed=True,
+                     name=forgery_py.name.full_name(),
+                     location=forgery_py.address.city(),
+                     about_me=forgery_py.lorem_ipsum.sentence(),
+                     member_since=forgery_py.date.date(True))
+            db.session.add(u)
+            try:
+                db.session.commit()
+            except IntegrityError:
+                db.session.rollback()
 
 
 class AnonymousUser(AnonymousUserMixin):
@@ -180,5 +205,34 @@ class Post(db.Model):
     __tablename__ = 'posts'
     id = db.Column(db.Integer, primary_key=True)
     body = db.Column(db.TEXT)
+    body_html = db.Column(db.TEXT)
     timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
     author_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+
+    # 生产虚拟文章数据
+    @staticmethod
+    def generate_fake(count=100):
+        from random import seed, randint
+        import forgery_py
+
+        seed()
+        user_count = User.query.count()
+        for i in range(count):
+            # 为了保证每次获得一个不同的随机用户
+            u = User.query.offset(randint(0, user_count - 1)).first()
+            p = Post(body=forgery_py.lorem_ipsum.sentences(randint(1, 3)),
+                     timestamp=forgery_py.date.date(True),
+                     author=u)
+            db.session.add(p)
+            db.session.commit()
+    #跟进body是 set，产生新的值，保存在body_html
+    @staticmethod
+    def on_change_body(target, value, oldvalue, initiator):
+        allowed_tags = ['a', 'abbr', 'acronym', 'b', 'blockquote', 'code',
+                        'em', 'i', 'li', 'ol', 'pre', 'strong', 'ul',
+                        'h1', 'h2', 'h3', 'p']
+        target.body_html=bleach.linkify(bleach.clean(
+            markdown(value,output_format='html'),
+            tags=allowed_tags,strip=True))
+
+db.event.listen(Post.body,'set',Post.on_change_body)

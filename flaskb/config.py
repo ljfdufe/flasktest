@@ -9,6 +9,7 @@ class Config:
     FLASK_MAIL_SUBJECT_PREFIX = '[Flasky]'
     FLASK_MAIL_SENDER = 'Flask Admin<ljfdufe@126.com>'
     FLASK_ADMIN = 'ljfdufe@126.com'
+    FLASK_POSTS_PER_PAGE=15
 
     @staticmethod
     def init_app(app):

@@ -1,4 +1,5 @@
-from flask import render_template, session, abort, flash, redirect, url_for
+from flask import render_template, session, abort, flash, redirect, \
+    url_for, request, current_app
 from flask_login import login_required, current_user
 from .forms import NameForm, EditProfileForm, EditProfileAdminForm, PostForm
 from . import main
@@ -12,8 +13,12 @@ def user(username):
     user = User.query.filter_by(username=username).first()
     if user is None:
         abort(404)
-    posts = user.posts.order_by(Post.timestamp.desc()).all()
-    return render_template('user.html', user=user,posts=posts)
+    page = request.args.get('page', 1, type=int)
+    paginate = Post.query.order_by(Post.timestamp.desc()).paginate(
+        page=page, per_page=current_app.config['FLASK_POSTS_PER_PAGE'], error_out=True
+    )
+    posts = paginate.items
+    return render_template('user.html', user=user, posts=posts, paginate=paginate)
 
 
 @main.route('/', methods=['GET', 'POST'])
@@ -24,8 +29,12 @@ def index():
         post = Post(body=form.body.data, author=current_user._get_current_object())
         db.session.add(post)
         return redirect(url_for('.index'))
-    posts = Post.query.order_by(Post.timestamp.desc()).all()
-    return render_template('index.html', form=form, posts=posts)
+    page = request.args.get('page', 1, type=int)
+    paginate = Post.query.order_by(Post.timestamp.desc()).paginate(
+        page=page, per_page=current_app.config['FLASK_POSTS_PER_PAGE'], error_out=True
+    )
+    posts = paginate.items
+    return render_template('index.html', form=form, posts=posts, paginate=paginate)
 
     # form = NameForm()
     # if form.validate():
@@ -86,3 +95,10 @@ def edit_profile_admin(id):
     form.location.data = user.location
     form.about_me.data = user.about_me
     return render_template('edit_profile.html', form=form, user=user)
+
+
+#单个文字地址链接
+@main.route('/post/<int:id>')
+def post(id):
+    post = Post.query.get_or_404(id)
+    return render_template('post.html',post=[post])
